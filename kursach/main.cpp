@@ -15,10 +15,10 @@ using json = nlohmann::json;
 #include "http_client.h"
 #include "weather_service.h"
 
-// ------- платформа и кодировки -------
+
 #ifdef _WIN32
 #include <windows.h>
-// Конвертация UTF-8 -> текущая кодовая страница консоли
+
 static std::string to_console_cp(const std::string& utf8) {
     int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
     if (wlen <= 0) return utf8;
@@ -38,14 +38,14 @@ static std::string to_console_cp(const std::string& utf8) {
 static std::string to_console_cp(const std::string& s) { return s; }
 #endif
 
-// Нормализатор локального времени cross-platform
+
 #ifdef _WIN32
 #define LOCALTIME(dst, src) localtime_s((dst), (src))
 #else
 #define LOCALTIME(dst, src) localtime_r((src), (dst))
 #endif
 
-// ---------- Вспомогательные функции ----------
+
 static inline std::string day_of(const std::string& iso) { return iso.size() >= 10 ? iso.substr(0, 10) : iso; }
 static inline std::string hhmm_of(const std::string& iso) { return iso.size() >= 16 ? iso.substr(11, 5) : ""; }
 
