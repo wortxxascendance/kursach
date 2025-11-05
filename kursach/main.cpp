@@ -1,5 +1,4 @@
-﻿
-#define NOMINMAX
+﻿#define NOMINMAX
 
 #include <iostream>
 #include <fstream>
@@ -8,6 +7,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <sstream>
+#include <ctime>
 
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -15,19 +15,22 @@ using json = nlohmann::json;
 #include "http_client.h"
 #include "weather_service.h"
 
+// ------- платформа и кодировки -------
 #ifdef _WIN32
 #include <windows.h>
-// Конвертация UTF-8 -> текущая кодовая страница консоли (чтобы не было кракозябр в Debug Console VS)
+// Конвертация UTF-8 -> текущая кодовая страница консоли
 static std::string to_console_cp(const std::string& utf8) {
     int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
     if (wlen <= 0) return utf8;
+
     std::wstring w(wlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &w[0], wlen);
 
     UINT cp = GetConsoleOutputCP();
     int blen = WideCharToMultiByte(cp, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (blen <= 0) return utf8;
-    std::string out(blen ? blen - 1 : 0, '\0');
+
+    std::string out(blen ? blen - 1 : 0, '\0'); // -1 без завершающего '\0'
     if (blen) WideCharToMultiByte(cp, 0, w.c_str(), -1, &out[0], blen, nullptr, nullptr);
     return out;
 }
@@ -35,9 +38,34 @@ static std::string to_console_cp(const std::string& utf8) {
 static std::string to_console_cp(const std::string& s) { return s; }
 #endif
 
+// Нормализатор локального времени cross-platform
+#ifdef _WIN32
+#define LOCALTIME(dst, src) localtime_s((dst), (src))
+#else
+#define LOCALTIME(dst, src) localtime_r((src), (dst))
+#endif
+
 // ---------- Вспомогательные функции ----------
 static inline std::string day_of(const std::string& iso) { return iso.size() >= 10 ? iso.substr(0, 10) : iso; }
 static inline std::string hhmm_of(const std::string& iso) { return iso.size() >= 16 ? iso.substr(11, 5) : ""; }
+
+static std::string iso_date(const std::tm& tm) {
+    char buf[11];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tm);
+    return buf;
+}
+
+static void today_and_tomorrow(std::string& start, std::string& end) {
+    std::time_t t = std::time(nullptr);
+    std::tm lt{};
+    LOCALTIME(&lt, &t);
+
+    start = iso_date(lt);        // сегодня
+
+    lt.tm_mday += 1;             // завтра
+    std::mktime(&lt);             // нормализация
+    end = iso_date(lt);
+}
 
 static const char* wmo_text(int c) {
     switch (c) {
@@ -69,15 +97,11 @@ static void print_help() {
     std::cout <<
         "Usage:\n"
         "  kursach.exe [--lat <lat>] [--lon <lon>] [--start YYYY-MM-DD] [--end YYYY-MM-DD]\n"
-        "              [--file path.json] [--place \"Название\"]\n"
-        "Examples:\n"
-        "  kursach.exe --lat 55.7558 --lon 37.6173 --start 2025-10-15 --end 2025-10-16\n"
-        "  kursach.exe --file moscow.json --place \"Москва\"\n";
+        "              [--file path.json] [--place \"Название\"]\n";
 }
 
-// ---------- Обратное геокодирование (Open-Meteо + резерв Nominatim) ----------
+// ---------- Обратное геокодирование ----------
 static std::string resolve_place(double lat, double lon, HttpClient& http) {
-    // 1) Пробуем Open-Meteo reverse
     try {
         std::ostringstream u;
         u.setf(std::ios::fixed); u.precision(6);
@@ -111,7 +135,6 @@ static std::string resolve_place(double lat, double lon, HttpClient& http) {
     }
     catch (...) {}
 
-    // 2) Резерв: Nominatim (OSM)
     try {
         std::ostringstream u;
         u.setf(std::ios::fixed); u.precision(6);
@@ -141,16 +164,19 @@ static std::string resolve_place(double lat, double lon, HttpClient& http) {
 
 // =========================== main ===========================
 int main(int argc, char** argv) {
+#ifdef _WIN32
     SetConsoleCP(1251);
     SetConsoleOutputCP(1251);
+#endif
     try {
-        // Значения по умолчанию (Москва)
+        // умолчания
         double lat = 55.7558, lon = 37.6173;
-        std::string start = "2025-10-15", end = "2025-10-16";
+        std::string start, end;
+        today_and_tomorrow(start, end);
         bool offline = false; std::string path;
         std::string place_override;
 
-        // Разбор аргументов
+        // разбор аргументов
         for (int i = 1; i < argc; ++i) {
             std::string a = argv[i];
             if (a == "--lat" && i + 1 < argc) lat = std::stod(argv[++i]);
@@ -163,7 +189,8 @@ int main(int argc, char** argv) {
         }
 
         HttpClient http;
-        // Получаем JSON прогноза
+
+        // получение данных
         std::string jsonText;
         if (offline) {
             std::ifstream in(path);
@@ -172,13 +199,13 @@ int main(int argc, char** argv) {
         }
         else {
             const std::string url = WeatherService::buildUrl(lat, lon, start, end);
-            jsonText = http.get(url); // без ключей
+            jsonText = http.get(url);
         }
 
-        // Парсинг
+        // парсинг
         const auto pts = WeatherService::parseHourly(jsonText);
 
-        // Заголовок
+        // заголовок
         std::string place = !place_override.empty()
             ? place_override
             : (offline ? "офлайн-данные" : resolve_place(lat, lon, http));
@@ -187,7 +214,7 @@ int main(int argc, char** argv) {
         std::cout << "Location: " << to_console_cp(place)
             << " (" << std::fixed << std::setprecision(4) << lat << ", " << lon << ")\n";
 
-        // Вывод таблицы
+        // вывод таблицы
         std::string cur_day;
         for (const auto& p : pts) {
             const std::string d = day_of(p.time);
